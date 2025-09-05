@@ -214,6 +214,7 @@ def generate_enhanced_pymol_script(json_file, structure_file, selection_str, out
     
     # Parse and process contacts
     contacts = parse_json_contacts(json_file, filter_selection)
+    interaction_styling = []  # Initialize styling list
     
     if not contacts:
         print("Warning: No contacts found for the specified selection!")
@@ -259,9 +260,8 @@ def generate_enhanced_pymol_script(json_file, structure_file, selection_str, out
             
             used_interaction_types.add((interaction_type, dist_flag))
         
-        # Apply enhanced styling
-        add_command('')
-        add_command('# Apply interaction-specific styling')
+        # Store styling info for later application (after util.cbaw)
+        interaction_styling = []
         for interaction_type, flag in used_interaction_types:
             label = f'{interaction_type}-{flag}'
             
@@ -271,10 +271,7 @@ def generate_enhanced_pymol_script(json_file, structure_file, selection_str, out
                 gap = pymol_config['dashgap'][interaction_type][flag]
                 length = pymol_config['dashlength'][interaction_type][flag]
                 
-                add_command(f'color {color}, {label}')
-                add_command(f'set dash_radius, {radius}, {label}')
-                add_command(f'set dash_gap, {gap}, {label}')
-                add_command(f'set dash_length, {length}, {label}')
+                interaction_styling.append((label, color, radius, gap, length))
         
         # Print interaction summary
         add_command('')
@@ -284,9 +281,9 @@ def generate_enhanced_pymol_script(json_file, structure_file, selection_str, out
     
     # Enhanced final visualization
     add_command('')
-    add_command('# Enhanced final visualization')
+    add_command('# Enhanced final visualization - IMPORTANT: util.cbaw resets colors!')
     add_command('hide labels')
-    add_command('util.cbaw')
+    add_command('util.cbaw')  # This MUST come before interaction styling
     add_command('bg_color white')
     add_command('show cartoon')
     add_command('set cartoon_side_chain_helper, 1')
@@ -297,6 +294,16 @@ def generate_enhanced_pymol_script(json_file, structure_file, selection_str, out
     add_command('show sticks, het')
     add_command('show spheres, het')
     add_command('color atomic, het')
+    
+    # Apply interaction styling AFTER util.cbaw to prevent color reset
+    if contacts and interaction_styling:
+        add_command('')
+        add_command('# Apply interaction-specific styling AFTER util.cbaw')
+        for label, color, radius, gap, length in interaction_styling:
+            add_command(f'color {color}, {label}')
+            add_command(f'set dash_radius, {radius}, {label}')
+            add_command(f'set dash_gap, {gap}, {label}')
+            add_command(f'set dash_length, {length}, {label}')
     
     # Create interaction legend
     add_command('')
@@ -327,7 +334,7 @@ def generate_enhanced_pymol_script(json_file, structure_file, selection_str, out
     # Save session with descriptive name
     base_name = os.path.splitext(os.path.basename(structure_file))[0]
     selection_clean = selection_str.replace('/', '_').replace(':', '_')
-    pse_file = f"{base_name}_{selection_clean}_arpeggio.pse"
+    pse_file = f"{base_name}_{selection_clean}.pse"
     add_command(f'save {pse_file}')
     add_command('')
     add_command(f'print "Visualization complete! Session saved as {pse_file}"')
