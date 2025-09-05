@@ -2,13 +2,22 @@
 """
 Integrated Arpeggio Analysis and Visualization Tool
 Combines pdbe-arpeggio analysis with PyMOL visualization in one command
+Now supports automatic PyMOL execution and PSE file generation!
+
 conda activate stab-ddg
 cd /mnt/d/conda/jupyter/stab/arpeggio
+
+# Basic usage
 python arpeggio_visualizer.py 1crn.cif -s /A/10/
-# 多个选择一次处理
-python arpeggio_visualizer.py 1crn.cif -s /A/10/ /B/15/ /C/20/
-# 不同链和残基
-python arpeggio_visualizer.py protein.pdb -s /A/10/ /B/25/ /C/30/
+
+# With automatic PyMOL execution (generates PSE files automatically)
+python arpeggio_visualizer.py 1crn.cif -s /A/10/ --auto-pymol
+
+# 多个选择一次处理 (each selection gets separate PyMOL session)
+python arpeggio_visualizer.py 1crn.cif -s /A/10/ /B/15/ /C/20/ --auto-pymol
+
+# 不同链和残基 (different chains and residues)
+python arpeggio_visualizer.py protein.pdb -s /A/10/ /B/25/ /C/30/ --auto-pymol
 """
 
 import json
@@ -18,6 +27,7 @@ import sys
 import subprocess
 import tempfile
 import shutil
+import time
 
 def run_arpeggio_analysis(structure_file, selection, output_dir="out"):
     """Run pdbe-arpeggio analysis"""
@@ -443,6 +453,55 @@ def parse_json_contacts(json_file, selection=None):
     
     return contacts
 
+def run_pymol_automation(structure_file, script_file, pse_file):
+    """Automatically run PyMOL with the generated script and save PSE file"""
+    print(f"Starting PyMOL automation for {script_file}...")
+    
+    # Create a temporary PyMOL command script
+    temp_script = f"temp_pymol_commands_{os.getpid()}.pml"
+    
+    try:
+        with open(temp_script, 'w') as f:
+            f.write(f"# Automated PyMOL execution script\n")
+            f.write(f"load {structure_file}\n")
+            f.write(f"run {script_file}\n")
+            f.write(f"save {pse_file}\n")
+            f.write("quit\n")
+        
+        # Run PyMOL with the command script
+        cmd = ["pymol", "-c", temp_script]  # -c for command line mode
+        
+        print(f"Executing: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)  # 5 minute timeout
+        
+        if result.returncode == 0:
+            print(f"✓ PyMOL automation completed successfully!")
+            print(f"  - PSE file saved: {pse_file}")
+            return True
+        else:
+            print(f"✗ PyMOL automation failed with return code {result.returncode}")
+            if result.stderr:
+                print(f"Error output: {result.stderr}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print("✗ PyMOL automation timed out (5 minutes)")
+        return False
+    except FileNotFoundError:
+        print("✗ PyMOL not found. Make sure PyMOL is installed and in your PATH.")
+        print("  You can still manually run: pymol", script_file)
+        return False
+    except Exception as e:
+        print(f"✗ Error during PyMOL automation: {e}")
+        return False
+    finally:
+        # Clean up temporary script
+        if os.path.exists(temp_script):
+            try:
+                os.remove(temp_script)
+            except:
+                pass
+
 def main():
     parser = argparse.ArgumentParser(description='''
     
@@ -456,11 +515,14 @@ def main():
         # Analyze chain A residue 10
         python arpeggio_visualizer.py 1crn.cif -s /A/10/
         
+        # Analyze with automatic PyMOL execution and PSE generation
+        python arpeggio_visualizer.py 1crn.cif -s /A/10/ --auto-pymol
+        
         # Analyze chain B residue 25 with custom output
         python arpeggio_visualizer.py protein.pdb -s /B/25/ -o results
         
-        # Multiple residues (will run separate analyses)
-        python arpeggio_visualizer.py protein.pdb -s /A/10/ /A/15/ /B/20/
+        # Multiple residues with automatic PyMOL (each gets separate PSE file)
+        python arpeggio_visualizer.py protein.pdb -s /A/10/ /A/15/ /B/20/ --auto-pymol
     
     ''', formatter_class=argparse.RawTextHelpFormatter)
     
@@ -473,6 +535,10 @@ def main():
                        help='Skip arpeggio analysis (use existing JSON files)')
     parser.add_argument('--pymol-only', action='store_true',
                        help='Generate PyMOL script only, don\'t run arpeggio')
+    parser.add_argument('--auto-pymol', action='store_true',
+                       help='Automatically run PyMOL to generate PSE files')
+    parser.add_argument('--no-auto-pymol', action='store_true',
+                       help='Disable automatic PyMOL execution (default behavior)')
     
     args = parser.parse_args()
     
@@ -504,14 +570,30 @@ def main():
         print(f"Generating enhanced PyMOL visualization...")
         pse_file = generate_enhanced_pymol_script(json_file, args.structure_file, selection, script_name)
         
+        # Automatic PyMOL execution
+        pymol_success = False
+        if args.auto_pymol and not args.no_auto_pymol:
+            print(f"Running PyMOL automation...")
+            pymol_success = run_pymol_automation(args.structure_file, script_name, pse_file)
+            if pymol_success:
+                print(f"  - PSE file automatically generated: {pse_file}")
+        
         print(f"\n✓ Analysis complete for selection {selection}")
         print(f"  - PyMOL script: {script_name}")
-        print(f"  - Session file: {pse_file}")
-        print(f"  - To visualize: pymol {script_name}")
+        if pymol_success:
+            print(f"  - PSE file: {pse_file} (automatically generated)")
+        else:
+            print(f"  - Expected PSE file: {pse_file}")
+            print(f"  - To visualize manually: pymol {script_name}")
     
     print(f"\n{'='*60}")
     print("All selections processed successfully!")
-    print("Use 'pymol <script_name>' to view the results.")
+    if args.auto_pymol and not args.no_auto_pymol:
+        print("PyMOL sessions have been automatically generated.")
+        print("You can open the PSE files directly in PyMOL.")
+    else:
+        print("Use 'pymol <script_name>' to view the results.")
+        print("Or use --auto-pymol flag to automatically generate PSE files.")
     print(f"{'='*60}")
 
 if __name__ == '__main__':
